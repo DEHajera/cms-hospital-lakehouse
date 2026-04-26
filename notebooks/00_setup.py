@@ -18,10 +18,10 @@
 
 # === CHANGE THESE TWO VALUES ===
 SCHEMA_PREFIX = "hajera_lakehouse"              # your-name_lakehouse
-OWNER_EMAIL   = "hajerakhan@hotmail.com"        # your email
+OWNER_EMAIL   = "DEHajera@gmail.com"        # your email
 # ===============================
 
-CATALOG_NAME = "hive_metastore"  # Community Edition default
+CATALOG_NAME = "workspace"  # Community Edition default
 VOLUME_NAME  = "cms_raw"
 
 # Derived names

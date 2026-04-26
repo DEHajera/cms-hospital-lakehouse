@@ -74,25 +74,17 @@ for src in SOURCES:
 # COMMAND ----------
 
 def download_csv(url: str, local_name: str) -> str:
-    """Download a CSV to the raw volume and return the local path."""
-    # RAW_PATH from 00_setup.py
+    """Download a CSV directly to the Unity Catalog Volume.
+
+    On Databricks Free Edition's serverless compute, UC enforcement
+    blocks writes to the cluster's local /tmp/. Volumes appear as POSIX
+    paths, so urllib can write directly to them — one step, no copy needed.
+    """
     dest = f"{RAW_PATH}/{local_name}.csv"
-    dest_dbfs = dest.replace("/dbfs", "dbfs:") if dest.startswith("/dbfs") else dest
-    # Use urllib through the driver; writes to the DBFS-backed path
-    driver_dest = f"/tmp/{local_name}.csv"
-    print(f"Downloading {url} -> {driver_dest}")
-    urllib.request.urlretrieve(url, driver_dest)
-    # Copy into the Databricks filesystem
-    dbutils.fs.cp(f"file:{driver_dest}", dest_dbfs)
+    print(f"Downloading {url} -> {dest}")
+    urllib.request.urlretrieve(url, dest)
     print(f"  landed at {dest}")
     return dest
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Helper: land a CSV as a Bronze Delta table
-# MAGIC
-# MAGIC The `_batch_id`, `_ingest_ts`, `_source_file` audit columns are the backbone of every reliability pattern in this project — add them in exactly one place.
 
 # COMMAND ----------
 
@@ -124,11 +116,21 @@ def land_to_bronze(csv_path: str, table_name: str, batch_id: str) -> int:
     (df_audited.write
         .mode("append")
         .format("delta")
+        .option("delta.columnMapping.mode", "name")
+        .option("delta.minReaderVersion", "2")
+        .option("delta.minWriterVersion", "5")
         .saveAsTable(full_table))
 
     row_count = df_audited.count()
     print(f"  {table_name}: {row_count:,} rows appended (batch {batch_id}).")
     return row_count
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Helper: land a CSV as a Bronze Delta table
+# MAGIC
+# MAGIC The `_batch_id`, `_ingest_ts`, `_source_file` audit columns are the backbone of every reliability pattern in this project — add them in exactly one place.
 
 # COMMAND ----------
 
@@ -163,11 +165,21 @@ for tbl, n in totals.items():
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Replace <prefix> with your SCHEMA_PREFIX if running manually
-# MAGIC SELECT COUNT(*) AS n_rows, MIN(_ingest_ts) AS first_seen, MAX(_ingest_ts) AS last_seen, COUNT(DISTINCT _batch_id) AS n_batches
-# MAGIC FROM hajera_lakehouse_bronze.bronze_hospital_general
+# MAGIC SELECT
+# MAGIC   '_general' AS tbl, COUNT(*) AS n, COUNT(DISTINCT _batch_id) AS batches, MAX(_ingest_ts) AS latest
+# MAGIC FROM workspace.hajera_lakehouse_bronze.bronze_hospital_general
+# MAGIC UNION ALL SELECT '_readmissions', COUNT(*), COUNT(DISTINCT _batch_id), MAX(_ingest_ts)
+# MAGIC FROM workspace.hajera_lakehouse_bronze.bronze_readmissions
+# MAGIC UNION ALL SELECT '_hcahps', COUNT(*), COUNT(DISTINCT _batch_id), MAX(_ingest_ts)
+# MAGIC FROM workspace.hajera_lakehouse_bronze.bronze_hcahps
+# MAGIC UNION ALL SELECT '_timely_care', COUNT(*), COUNT(DISTINCT _batch_id), MAX(_ingest_ts)
+# MAGIC FROM workspace.hajera_lakehouse_bronze.bronze_timely_care
+# MAGIC ORDER BY tbl;
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC -- Transaction log — this is your DBA-level audi
+# MAGIC -- Transaction log — this is your DBA-level audit trail.
+# MAGIC -- Each row is one write operation. version 0 = table creation; version 1+ = appends.
+# MAGIC DESCRIBE HISTORY workspace.hajera_lakehouse_bronze.bronze_hospital_general
+# MAGIC
