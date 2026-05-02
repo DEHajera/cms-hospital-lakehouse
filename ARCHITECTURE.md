@@ -140,6 +140,24 @@ Where the DBA / SRE instincts show up in this codebase:
 | Silver | `state` (STRING) | `_silver_ts` | Query pattern is state-filtered; 50-ish partitions is healthy. |
 | Gold | `state` (STRING) | `year, hospital_id` | Dashboard filters by state + year; BI tool access pattern. |
 
+## Silver Partition Strategy — Implementation Update (May 2026)
+
+The original design (above) called for partition-by-`state` + ZORDER on `_silver_ts`
+for Silver tables. During Weekend 2 implementation this was revised to Delta
+**liquid clustering** on `(state, provider_id)`.
+
+**Why the change:**
+- Liquid clustering is the current Databricks recommendation for new Delta tables
+  (GA on DBR 15.2+; this project runs on DBR 18.1).
+- Auto-rebalances over time — no manual `OPTIMIZE ... ZORDER BY` tuning required.
+- Avoids small-file skew on low-cardinality partition keys (~50 states).
+- Single declarative concept replacing partition + ZORDER.
+
+**Clustering keys:**
+- `state` — primary dashboard filter dimension.
+- `provider_id` — join key from measure tables (readmissions, hcahps, timely_care)
+  back to the hospital dimension.
+
 Small-file management: `OPTIMIZE` runs at the end of each notebook; `VACUUM` weekly (or manually on Community Edition) to reclaim space.
 
 ## What this design explicitly *does not* do (and why)
