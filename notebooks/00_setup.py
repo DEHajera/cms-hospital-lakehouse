@@ -97,3 +97,31 @@ print(f"✓ Read back {reread.count()} row — setup OK")
 
 # Make variables available to notebooks that %run this one
 print("Config variables defined: CATALOG_NAME, BRONZE_SCHEMA, SILVER_SCHEMA, GOLD_SCHEMA, VOLUME_PATH, RAW_PATH")
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SHOW TABLES IN workspace.hajera_lakehouse_bronze;
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT 'hcahps' AS source, _batch_id, COUNT(*) AS rows
+# MAGIC FROM workspace.hajera_lakehouse_bronze.bronze_hcahps GROUP BY _batch_id
+# MAGIC UNION ALL
+# MAGIC SELECT 'hospital_general', _batch_id, COUNT(*)
+# MAGIC FROM workspace.hajera_lakehouse_bronze.bronze_hospital_general GROUP BY _batch_id
+# MAGIC UNION ALL
+# MAGIC SELECT 'readmissions', _batch_id, COUNT(*)
+# MAGIC FROM workspace.hajera_lakehouse_bronze.bronze_readmissions GROUP BY _batch_id
+# MAGIC UNION ALL
+# MAGIC SELECT 'timely_care', _batch_id, COUNT(*)
+# MAGIC FROM workspace.hajera_lakehouse_bronze.bronze_timely_care GROUP BY _batch_id;
+# MAGIC
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT current_version();
+# MAGIC

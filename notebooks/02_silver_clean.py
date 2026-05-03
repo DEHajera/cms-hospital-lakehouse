@@ -34,20 +34,31 @@ from pyspark.sql.types import StringType, DateType, DecimalType, IntegerType
 # COMMAND ----------
 
 def merge_to_silver(df, target_table: str, key_cols: list):
+    
     """
-    Upsert a DataFrame into a partitioned Silver Delta table.
-    Creates the table on first run; MERGEs on subsequent runs.
+    Upsert a DataFrame into a liquid-clustered Silver Delta table.
+    Creates the table on first run with CLUSTER BY (state, provider_id)
+    when both columns exist; MERGEs on subsequent runs.
     """
+
     full_target = f"{CATALOG_NAME}.{SILVER_SCHEMA}.{target_table}"
 
     df = df.withColumn("_silver_ts", F.current_timestamp())
 
     if not spark.catalog.tableExists(full_target):
-        (df.write
-            .format("delta")
-            .partitionBy("state")
-            .saveAsTable(full_target))
-        print(f"  ✓ Created {full_target} with {df.count():,} rows")
+        writer = df.write.format("delta")
+        # Liquid clustering on (state, <business_key>) — see ARCHITECTURE.md
+        # Accepts either provider_id or hospital_id as the second clustering key.
+        second_key = next(
+            (k for k in ["provider_id", "hospital_id"] if k in df.columns),
+            None
+        )
+        if second_key and "state" in df.columns:
+            writer = writer.clusterBy("state", second_key)
+        elif "state" in df.columns:
+            writer = writer.clusterBy("state")
+        writer.saveAsTable(full_target)
+        print(f"  ✓ Created {full_target} with {df.count():,} rows (clustered)")
         return
 
     df.createOrReplaceTempView("_silver_source")
@@ -67,6 +78,10 @@ def merge_to_silver(df, target_table: str, key_cols: list):
 # MAGIC ## Silver #1 — `hospital`
 # MAGIC
 # MAGIC Master hospital dimension. One row per Facility ID.
+
+# COMMAND ----------
+
+spark.table(f"{CATALOG_NAME}.{BRONZE_SCHEMA}.bronze_hospital_general").printSchema()
 
 # COMMAND ----------
 
@@ -92,15 +107,22 @@ bronze_deduped = (bronze
 
 silver_hospital = (bronze_deduped
     .select(
-        F.col("facility_id").cast(StringType()).alias("hospital_id"),
+        F.col("facility_id").cast(IntegerType()).cast(StringType()).alias("hospital_id"),
         F.trim(F.col("facility_name")).alias("hospital_name"),
         F.upper(F.trim(F.col("state"))).alias("state"),
-        F.trim(F.col("city")).alias("city"),
+        F.trim(F.col("city_town")).alias("city"),
         F.trim(F.col("address")).alias("address"),
         F.col("zip_code").cast(StringType()).alias("zip_code"),
         F.trim(F.col("hospital_type")).alias("hospital_type"),
         F.trim(F.col("hospital_ownership")).alias("hospital_ownership"),
-        F.col("hospital_overall_rating").cast(IntegerType()).alias("overall_rating"),
+        F.trim(F.col("county_parish")).alias("county"),
+        F.trim(F.col("telephone_number")).alias("phone"),
+        (F.upper(F.trim(F.col("emergency_services"))) == "YES").alias("has_emergency_services"),
+        F.col("hospital_overall_rating").isin("Not Available", "N/A", "*").alias("is_overall_rating_suppressed"),
+        F.when(
+            F.col("hospital_overall_rating").isin("Not Available", "N/A", "*"),
+            None
+        ).otherwise(F.col("hospital_overall_rating").cast(IntegerType())).alias("overall_rating"),
         F.col("_ingest_ts"),
         F.col("_batch_id"),
     )
@@ -109,6 +131,57 @@ silver_hospital = (bronze_deduped
 )
 
 merge_to_silver(silver_hospital, "silver_hospital", ["hospital_id"])
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT 
+# MAGIC   COUNT(*) AS total_rows,
+# MAGIC   COUNT(DISTINCT hospital_id) AS unique_hospitals
+# MAGIC FROM workspace.hajera_lakehouse_silver.silver_hospital;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC DESCRIBE DETAIL workspace.hajera_lakehouse_silver.silver_hospital;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT 
+# MAGIC   COUNT(*) AS total_rows,
+# MAGIC   COUNT(DISTINCT hospital_id) AS unique_hospitals
+# MAGIC FROM workspace.hajera_lakehouse_silver.silver_hospital;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT 
+# MAGIC   hospital_id, 
+# MAGIC   hospital_name, 
+# MAGIC   state, 
+# MAGIC   city, 
+# MAGIC   hospital_type,
+# MAGIC   is_overall_rating_suppressed, 
+# MAGIC   overall_rating
+# MAGIC FROM workspace.hajera_lakehouse_silver.silver_hospital
+# MAGIC WHERE state = 'VA'
+# MAGIC ORDER BY overall_rating DESC NULLS LAST
+# MAGIC LIMIT 20;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC DESCRIBE HISTORY workspace.hajera_lakehouse_silver.silver_hospital;
+
+# COMMAND ----------
+
+spark.table(f"{CATALOG_NAME}.{BRONZE_SCHEMA}.bronze_readmissions").printSchema()
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC DROP TABLE workspace.hajera_lakehouse_silver.silver_hospital;
 
 # COMMAND ----------
 
