@@ -26,3 +26,5 @@
 - Block 2.5: OPTIMIZE timing, final commit, polished week2.md
 
 - Week 2 raw notes - to polish later
+
+

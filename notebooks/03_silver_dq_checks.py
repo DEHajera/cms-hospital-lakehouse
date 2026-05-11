@@ -149,6 +149,81 @@ check_freshness(hospital, "silver_hospital", "_ingest_ts", max_age_days=180)
 #   silver_patient_experience
 #   silver_care_measure
 # And add referential-integrity checks: every child.hospital_id must exist in silver_hospital.
+# ─── silver_readmission_measure ────────────────────────────────────────────────
+readmission = spark.read.table(f"{CATALOG_NAME}.{SILVER_SCHEMA}.silver_readmission_measure")
+
+# PK check on composite key — null+unique check on a synthesized concatenation
+readmission_pk = readmission.withColumn(
+    "_pk", F.concat_ws("|", F.col("hospital_id"), F.col("measure_name"), F.col("start_date").cast("string"))
+)
+check_pk_not_null_unique(readmission_pk, "silver_readmission_measure", "_pk")
+
+# Null-rate checks — business keys must never be null
+check_null_rate(readmission, "silver_readmission_measure", "hospital_id", max_rate=0.0)
+check_null_rate(readmission, "silver_readmission_measure", "measure_name", max_rate=0.0)
+check_null_rate(readmission, "silver_readmission_measure", "start_date", max_rate=0.0)
+
+# Range — excess readmission ratio is centered on 1.0; CMS reports values 0.5–2.0 typically
+check_range(readmission, "silver_readmission_measure", "excess_readmission_ratio", 0, 10)
+
+# Freshness — CMS Care Compare refreshes quarterly, so 180 days is the tolerance
+check_freshness(readmission, "silver_readmission_measure", "_ingest_ts", max_age_days=180)
+
+
+# ─── silver_patient_experience (HCAHPS) ────────────────────────────────────────
+patient_experience = spark.read.table(f"{CATALOG_NAME}.{SILVER_SCHEMA}.silver_patient_experience")
+
+# PK check on 4-column composite
+pe_pk = patient_experience.withColumn(
+    "_pk", F.concat_ws("|",
+                      F.col("hospital_id"),
+                      F.col("hcahps_measure_id"),
+                      F.col("hcahps_answer_description"),
+                      F.col("start_date").cast("string"))
+)
+check_pk_not_null_unique(pe_pk, "silver_patient_experience", "_pk")
+
+# Null-rate checks on business keys
+check_null_rate(patient_experience, "silver_patient_experience", "hospital_id", max_rate=0.0)
+check_null_rate(patient_experience, "silver_patient_experience", "hcahps_measure_id", max_rate=0.0)
+check_null_rate(patient_experience, "silver_patient_experience", "hcahps_answer_description", max_rate=0.0)
+
+# Range — answer_percent is a percentage; star_rating is 1–5
+check_range(patient_experience, "silver_patient_experience", "answer_percent", 0, 100)
+check_range(patient_experience, "silver_patient_experience", "star_rating", 1, 5)
+
+# Freshness
+check_freshness(patient_experience, "silver_patient_experience", "_ingest_ts", max_age_days=180)
+
+
+# ─── silver_care_measure ───────────────────────────────────────────────────────
+care_measure = spark.read.table(f"{CATALOG_NAME}.{SILVER_SCHEMA}.silver_care_measure")
+
+# PK check on 3-column composite
+cm_pk = care_measure.withColumn(
+    "_pk", F.concat_ws("|", F.col("hospital_id"), F.col("measure_id"), F.col("start_date").cast("string"))
+)
+check_pk_not_null_unique(cm_pk, "silver_care_measure", "_pk")
+
+# Null-rate checks on business keys
+check_null_rate(care_measure, "silver_care_measure", "hospital_id", max_rate=0.0)
+check_null_rate(care_measure, "silver_care_measure", "measure_id", max_rate=0.0)
+
+# Note: skipping range check on score_numeric — timely-care measures have wildly
+# different ranges (minutes for ED-wait, percentages for sepsis-bundle), so a
+# single-bound range check is meaningless. A per-measure-id range check would be
+# the right shape for a future iteration.
+
+# Freshness
+check_freshness(care_measure, "silver_care_measure", "_ingest_ts", max_age_days=180)
+
+
+# ─── Referential integrity ─────────────────────────────────────────────────────
+# Every measure-table hospital_id MUST exist in silver_hospital. Anti-join is
+# the scalable way to do this — avoids the gotcha of NOT IN with NULLs.
+check_referential(hospital, readmission,         "hospital_id", "hospital_id", "silver_readmission_measure")
+check_referential(hospital, patient_experience,  "hospital_id", "hospital_id", "silver_patient_experience")
+check_referential(hospital, care_measure,        "hospital_id", "hospital_id", "silver_care_measure")
 
 # COMMAND ----------
 
@@ -178,3 +253,20 @@ print("✓ All HARD checks passed — Gold build may proceed.")
 # MAGIC FROM hajera_lakehouse_silver.dq_run_summary
 # MAGIC ORDER BY run_ts DESC
 # MAGIC LIMIT 50
+
+# COMMAND ----------
+
+print(len(dq_results))
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC OPTIMIZE workspace.hajera_lakehouse_silver.silver_hospital;
+# MAGIC OPTIMIZE workspace.hajera_lakehouse_silver.silver_readmission_measure;
+# MAGIC OPTIMIZE workspace.hajera_lakehouse_silver.silver_patient_experience;
+# MAGIC OPTIMIZE workspace.hajera_lakehouse_silver.silver_care_measure;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC DESCRIBE HISTORY workspace.hajera_lakehouse_silver.silver_patient_experience LIMIT 5;
