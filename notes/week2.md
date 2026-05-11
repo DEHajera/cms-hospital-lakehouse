@@ -27,4 +27,18 @@
 
 - Week 2 raw notes - to polish later
 
+## May 11 session — Block 2.4 (DQ harness)
 
+- Shipped 26-check DQ harness across all 4 Silver tables in 03_silver_dq_checks.
+  Five reusable check functions (pk, null_rate, range, referential, freshness).
+  Results persisted to dq_run_summary Delta table with batch_id for run history.
+  Severity-aware gating: HARD fails raise to block Gold, SOFT/WARN log without
+  blocking.
+
+- First run discovered CMS overall_rating suppression rate is actually 47%, not
+  the 25% the scaffold's threshold assumed. This IS the value of DQ — the harness
+  doing its job by surfacing real data shape vs. assumed data shape. Left
+  threshold strict so the WARN stays visible; will tune later with rationale.
+
+- OPTIMIZE run on all 4 Silver tables. Delta history now shows the full lifecycle:
+  CREATE TABLE AS SELECT → MERGE → OPTIMIZE — all queryable, all auditable.
